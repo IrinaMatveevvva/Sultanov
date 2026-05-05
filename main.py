@@ -1,126 +1,139 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
+import requests
 import json
+from datetime import datetime
 
-MOVIES_FILE = 'movies.json'
+# ВСТАВЬТЕ ВАШ КЛЮЧ НИЖЕ
+API_KEY = "ВАШ_КЛЮЧ_API" 
+HISTORY_FILE = 'conversion_history.json'
 
-def load_movies():
-    try:
-        with open(MOVIES_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return []
+class CurrencyConverter:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Currency Converter")
+        self.root.geometry("600x550")
 
-def save_movies(data):
-    with open(MOVIES_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        self.history = self.load_history()
+        self.currencies = ["USD", "EUR", "RUB", "GBP", "JPY", "CNY", "KZT"]
 
-def validate_input():
-    title = entry_title.get().strip()
-    genre = entry_genre.get().strip()
-    year = entry_year.get().strip()
-    rating = entry_rating.get().strip()
+        self.setup_ui()
 
-    if not title or not genre:
-        messagebox.showerror("Ошибка", "Название и жанр не должны быть пустыми.")
-        return False
+    def setup_ui(self):
+        # Панель ввода
+        frame_input = ttk.LabelFrame(self.root, text="Параметры конвертации", padding=15)
+        frame_input.pack(padx=10, pady=10, fill="x")
 
-    if not year.isdigit() or not (1800 <= int(year) <= 2100):
-        messagebox.showerror("Ошибка", "Год должен быть числом от 1800 до 2100.")
-        return False
+        ttk.Label(frame_input, text="Сумма:").grid(row=0, column=0, sticky="w")
+        self.entry_amount = ttk.Entry(frame_input)
+        self.entry_amount.grid(row=0, column=1, padx=5, pady=5)
 
-    if not (rating.replace('.', '', 1).isdigit() and 0 <= float(rating) <= 10):
-        messagebox.showerror("Ошибка", "Рейтинг должен быть числом от 0 до 10.")
-        return False
+        ttk.Label(frame_input, text="Из:").grid(row=0, column=2, padx=5)
+        self.combo_from = ttk.Combobox(frame_input, values=self.currencies, width=8, state="readonly")
+        self.combo_from.set("USD")
+        self.combo_from.grid(row=0, column=3, padx=5)
 
-    return True
+        ttk.Label(frame_input, text="В:").grid(row=0, column=4, padx=5)
+        self.combo_to = ttk.Combobox(frame_input, values=self.currencies, width=8, state="readonly")
+        self.combo_to.set("RUB")
+        self.combo_to.grid(row=0, column=5, padx=5)
 
-def add_movie():
-    if validate_input():
-        movie = {
-            "title": entry_title.get(),
-            "genre": entry_genre.get(),
-            "year": int(entry_year.get()),
-            "rating": float(entry_rating.get())
-        }
-        movies.append(movie)
-        save_movies(movies)
-        refresh_table()
-        clear_fields()
+        self.btn_convert = ttk.Button(frame_input, text="Конвертировать", command=self.convert)
+        self.btn_convert.grid(row=1, column=0, columnspan=6, pady=15)
 
-def refresh_table(filter_genre=None, filter_year=None):
-    for item in tree.get_children():
-        tree.delete(item)
-    for movie in movies:
-        if filter_genre and movie["genre"].lower() != filter_genre.lower():
-            continue
-        if filter_year and movie["year"] != int(filter_year):
-            continue
-        tree.insert("", "end", values=(movie["title"], movie["genre"], movie["year"], movie["rating"]))
+        # Результат
+        self.label_result = ttk.Label(self.root, text="Результат: ---", font=("Arial", 12, "bold"))
+        self.label_result.pack(pady=10)
 
-def apply_filters():
-    genre = entry_filter_genre.get().strip() if entry_filter_genre.get().strip() else None
-    year = entry_filter_year.get().strip() if entry_filter_year.get().strip() else None
-    refresh_table(genre, year)
+        # История
+        frame_hist = ttk.LabelFrame(self.root, text="История операций", padding=10)
+        frame_hist.pack(padx=10, pady=10, fill="both", expand=True)
 
-def clear_fields():
-    entry_title.delete(0, tk.END)
-    entry_genre.delete(0, tk.END)
-    entry_year.delete(0, tk.END)
-    entry_rating.delete(0, tk.END)
+        self.tree = ttk.Treeview(frame_hist, columns=("date", "from", "to", "res"), show="headings")
+        self.tree.heading("date", text="Дата и время")
+        self.tree.heading("from", text="Исходная сумма")
+        self.tree.heading("to", text="Валюта")
+        self.tree.heading("res", text="Итог")
+        
+        self.tree.column("date", width=120)
+        self.tree.column("res", width=100)
+        
+        self.tree.pack(fill="both", expand=True)
 
-movies = load_movies()
+        self.refresh_table()
 
-root = tk.Tk()
-root.title("Movie Library")
-root.geometry("800x500")
+    def convert(self):
+        # 1. Проверка API-ключа
+        if API_KEY == "ВАШ_КЛЮЧ_API" or not API_KEY:
+            messagebox.showerror("Ошибка API", "Пожалуйста, вставьте ваш реальный API-ключ в код!")
+            return
 
-tab_control = ttk.Notebook(root)
-tab_main = ttk.Frame(tab_control)
-tab_filter = ttk.Frame(tab_control)
-tab_control.add(tab_main, text="Добавить фильм")
-tab_control.add(tab_filter, text="Фильтр")
-tab_control.pack(expand=1, fill="both")
+        # 2. Валидация суммы
+        amount_str = self.entry_amount.get()
+        try:
+            amount = float(amount_str)
+            if amount <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showwarning("Ошибка ввода", "Введите положительное число в поле суммы!")
+            return
 
-# Вкладка "Добавить фильм"
-tk.Label(tab_main, text="Название:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-entry_title = tk.Entry(tab_main, width=40)
-entry_title.grid(row=0, column=1, padx=5, pady=5)
+        # 3. Валидация выбора валют
+        from_curr = self.combo_from.get()
+        to_curr = self.combo_to.get()
+        if not from_curr or not to_curr:
+            messagebox.showwarning("Ошибка", "Выберите валюты из списка!")
+            return
 
-tk.Label(tab_main, text="Жанр:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-entry_genre = tk.Entry(tab_main, width=40)
-entry_genre.grid(row=1, column=1, padx=5, pady=5)
+        # 4. Запрос к API
+        url = f"https://v6.exchangerate-api.com/v6/{API_KEY}/pair/{from_curr}/{to_curr}/{amount}"
+        
+        try:
+            response = requests.get(url, timeout=10)
+            data = response.json()
 
-tk.Label(tab_main, text="Год выпуска:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
-entry_year = tk.Entry(tab_main, width=40)
-entry_year.grid(row=2, column=1, padx=5, pady=5)
+            if data.get("result") == "success":
+                result = round(data["conversion_result"], 2)
+                res_text = f"{amount} {from_curr} = {result} {to_curr}"
+                self.label_result.config(text=f"Результат: {res_text}")
 
-tk.Label(tab_main, text="Рейтинг (0-10):").grid(row=3, column=0, padx=5, pady=5, sticky="w")
-entry_rating = tk.Entry(tab_main, width=40)
-entry_rating.grid(row=3, column=1, padx=5, pady=5)
+                # Сохранение и обновление
+                new_entry = {
+                    "date": datetime.now().strftime("%d.%m.%Y %H:%M"),
+                    "from": f"{amount} {from_curr}",
+                    "to": to_curr,
+                    "result": f"{result}"
+                }
+                self.history.append(new_entry)
+                self.save_history()
+                self.refresh_table()
+            else:
+                error_msg = data.get("error-type", "Unknown error")
+                messagebox.showerror("Ошибка API", f"Сервер вернул ошибку: {error_msg}")
+        except Exception as e:
+            messagebox.showerror("Ошибка сети", f"Не удалось связаться с сервером: {e}")
 
-btn_add = ttk.Button(tab_main, text="Добавить фильм", command=add_movie)
-btn_add.grid(row=4, column=0, columnspan=2, pady=10)
+    def load_history(self):
+        try:
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
 
-tree = ttk.Treeview(tab_main, columns=("Название", "Жанр", "Год", "Рейтинг"), show="headings")
-for col in ("Название", "Жанр", "Год", "Рейтинг"):
-    tree.heading(col, text=col)
-tree.grid(row=5, column=0, columnspan=2, padx=5, pady=5, sticky="nsew")
-scrollbar = ttk.Scrollbar(tab_main, orient="vertical", command=tree.yview)
-scrollbar.grid(row=5, column=2, sticky="ns")
-tree.configure(yscrollcommand=scrollbar.set)
+    def save_history(self):
+        try:
+            with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.history, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Ошибка сохранения файла: {e}")
 
-# Вкладка "Фильтр"
-tk.Label(tab_filter, text="Жанр:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-entry_filter_genre = tk.Entry(tab_filter)
-entry_filter_genre.grid(row=0, column=1, padx=5, pady=5)
+    def refresh_table(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for h in reversed(self.history):
+            self.tree.insert("", "end", values=(h['date'], h['from'], h['to'], h['result']))
 
-tk.Label(tab_filter, text="Год выпуска:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-entry_filter_year = tk.Entry(tab_filter)
-entry_filter_year.grid(row=1, column=1, padx=5, pady=5)
-
-btn_apply = ttk.Button(tab_filter, text="Применить фильтр", command=apply_filters)
-btn_apply.grid(row=2, column=0, columnspan=2, pady=10)
-
-refresh_table()
-root.mainloop()
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = CurrencyConverter(root)
+    root.mainloop()
